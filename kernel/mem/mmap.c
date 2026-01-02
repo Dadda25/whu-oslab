@@ -41,6 +41,11 @@ void mmap_init()
 // 注意: list_head 保留, 不会被申请出去
 mmap_region_t* mmap_region_alloc()
 {
+    // 检查是否已初始化
+    if(list_head == NULL) {
+        panic("mmap_region_alloc: mmap not initialized! Call mmap_init() first");
+    }
+    
     spinlock_acquire(&list_lk);
     
     // list_head 自己不分配出去，从 list_head->next 开始分配

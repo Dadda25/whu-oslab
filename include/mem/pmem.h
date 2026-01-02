@@ -3,6 +3,9 @@
 
 #include "common.h"
 
+#define PMEM_KERNEL true
+#define PMEM_USER   false
+
 // 来自kernel.ld
 extern char KERNEL_DATA[];
 extern char ALLOC_BEGIN[];

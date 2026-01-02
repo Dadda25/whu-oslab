@@ -19,32 +19,35 @@ static pgtbl_t kernel_pgtbl; // 内核页表
 // 提示：使用 VA_TO_VPN PTE_TO_PA PA_TO_PTE
 pte_t* vm_getpte(pgtbl_t pgtbl, uint64 va, bool alloc)
 {
+    pgtbl_t current_pgtbl = pgtbl;  // ← 使用局部变量
+    
     // 三级页表遍历
     for(int level = 2; level > 0; level--) {
         uint64 vpn = VA_TO_VPN(va, level);
-        pte_t* pte = &pgtbl[vpn];
+        pte_t* pte = &current_pgtbl[vpn];
         
         if((*pte) & PTE_V) {
             // PTE有效，获取下一级页表
-            pgtbl = (pgtbl_t)PTE_TO_PA(*pte);
+            current_pgtbl = (pgtbl_t)PTE_TO_PA(*pte);
         } else {
             // PTE无效
             if(!alloc) {
                 return NULL;
             }
             // 申请新的页表页
-            pgtbl = (pgtbl_t)pmem_alloc(true);
-            if(pgtbl == NULL) {
+            current_pgtbl = (pgtbl_t)pmem_alloc(true);
+            if(current_pgtbl == NULL) {
                 return NULL;
             }
-            // 设置PTE指向新页表，只设置V标志（页表页）
-            *pte = PA_TO_PTE((uint64)pgtbl) | PTE_V;
+            memset(current_pgtbl, 0, PGSIZE);  // ← 添加这行：清零新页表
+            // 设置PTE指向新页表
+            *pte = PA_TO_PTE((uint64)current_pgtbl) | PTE_V;
         }
     }
     
     // 返回level 0的PTE
     uint64 vpn = VA_TO_VPN(va, 0);
-    return &pgtbl[vpn];
+    return &current_pgtbl[vpn];
 }
 
 // 在pgtbl中建立 [va, va + len) -> [pa, pa + len) 的映射

@@ -18,8 +18,10 @@ static void copy_range(pgtbl_t old, pgtbl_t new, uint64 begin, uint64 end)
     for(va = begin; va < end; va += PGSIZE)
     {
         pte = vm_getpte(old, va, false);
-        assert(pte != NULL, "uvm_copy_pgtbl: pte == NULL");
-        assert((*pte) & PTE_V, "uvm_copy_pgtbl: pte not valid");
+        
+        if(pte == NULL || !((*pte) & PTE_V)) {
+            continue;
+        }
         
         pa = (uint64)PTE_TO_PA(*pte);
         flags = (int)PTE_FLAGS(*pte);
@@ -105,16 +107,14 @@ void uvm_destroy_pgtbl(pgtbl_t pgtbl)
 }
 
 // 拷贝页表 (拷贝并不包括trapframe 和 trampoline)
-void uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint32 ustack_pages, mmap_region_t* mmap)
+void uvm_copy_pgtbl(pgtbl_t new, pgtbl_t old, uint64 heap_top, uint32 ustack_pages, mmap_region_t* mmap)
 {
     /* step-1: USER_BASE ~ heap_top */
-    // USER_BASE 应该是 0，从0开始到heap_top
-    if(heap_top > 0) {
-        copy_range(old, new, 0, PG_ROUND_UP(heap_top));
+    if(heap_top > PGSIZE) {
+        copy_range(old, new, PGSIZE, PG_ROUND_UP(heap_top));
     }
 
     /* step-2: ustack */
-    // 用户栈在TRAPFRAME下方
     uint64 ustack_top = TRAPFRAME;
     uint64 ustack_bottom = ustack_top - ustack_pages * PGSIZE;
     if(ustack_pages > 0) {
@@ -140,39 +140,33 @@ void uvm_mmap(uint64 begin, uint32 npages, int perm)
 
     proc_t* p = myproc();
     
-    /* 修改 mmap 链 (分情况的链式操作) */
+    /* 修改 mmap 链 */
     mmap_region_t* new_region = mmap_region_alloc();
     new_region->begin = begin;
     new_region->npages = npages;
     new_region->next = NULL;
     
-    // 情况1: mmap链为空
     if(p->mmap == NULL) {
         p->mmap = new_region;
-    } 
-    // 情况2: 插入到链表中（保持地址有序）
-    else {
+    } else {
         mmap_region_t* prev = NULL;
         mmap_region_t* curr = p->mmap;
         
-        // 找到插入位置
         while(curr != NULL && curr->begin < begin) {
             prev = curr;
             curr = curr->next;
         }
         
         if(prev == NULL) {
-            // 插入到链表头
             new_region->next = p->mmap;
             p->mmap = new_region;
         } else {
-            // 插入到中间或末尾
             new_region->next = curr;
             prev->next = new_region;
         }
     }
 
-    /* 修改页表 (物理页申请 + 页表映射) */
+    /* 修改页表 */
     for(uint32 i = 0; i < npages; i++) {
         uint64 va = begin + i * PGSIZE;
         uint64 pa = (uint64)pmem_alloc(false);
