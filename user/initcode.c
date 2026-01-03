@@ -37,16 +37,27 @@ int main()
     int pid = syscall(SYS_fork);
 
     if(pid == 0) {
-        // 子进程：简化测试，立即退出
+        // 子进程：打印测试信息
         syscall(SYS_print, "child: hello\n");
+        syscall(SYS_print, str1);  // 应该打印 "MMAP\n"
+        syscall(SYS_print, str2);  // 应该打印 "HEAP\n"
         syscall(SYS_exit, 1);
+        syscall(SYS_print, "child: never reach here\n");
     } else {
         // 父进程：等待子进程
         int exit_state;
         syscall(SYS_wait, &exit_state);
-        syscall(SYS_print, "parent: child exited\n");
+        
+        if(exit_state == 1) {
+            syscall(SYS_print, "parent: child exited with state 1\n");
+            syscall(SYS_print, str1);  // 父进程也打印，验证内存
+            syscall(SYS_print, str2);
+        } else {
+            syscall(SYS_print, "parent: error, unexpected exit state\n");
+        }
     }
 
+    syscall(SYS_print, "test completed, entering infinite loop\n");
     while(1);
     return 0;
 }
