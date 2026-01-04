@@ -1,6 +1,7 @@
 #include "lib/lock.h"
 #include "lib/print.h"
 #include "dev/timer.h"
+#include "proc/proc.h"
 #include "memlayout.h"
 #include "riscv.h"
 
@@ -46,6 +47,12 @@ void timer_init()
 
 // 系统时钟
 static timer_t sys_timer;
+
+// 获取当前时钟（用于时钟等）
+timer_t* timer_get()
+{
+    return &sys_timer;
+}
 
 // 时钟创建(初始化系统时钟)
 void timer_create()

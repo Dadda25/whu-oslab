@@ -22,20 +22,19 @@ extern char* exception_info[16]; // 异常错误信息
 // 用户态trap处理的核心逻辑
 void trap_user_handler()
 {
-    uint64 sepc = r_sepc();          // 记录了发生异常时的pc值
-    uint64 sstatus = r_sstatus();    // 与特权模式和中断相关的状态信息
-    uint64 scause = r_scause();      // 引发trap的原因
-    uint64 stval = r_stval();        // 发生trap时保存的附加信息(不同trap不一样)
+    uint64 sepc = r_sepc();          
+    uint64 sstatus = r_sstatus();    
+    uint64 scause = r_scause();      
+    uint64 stval = r_stval();        
     proc_t* p = myproc();
 
     // 确认trap来自U-mode
     assert((sstatus & SSTATUS_SPP) == 0, "trap_user_handler: not from u-mode");
 
-    // send interrupts and exceptions to kerneltrap(),
-    // since we're now in the kernel.
+    // send interrupts and exceptions to kerneltrap()
     w_stvec((uint64)kernel_vector);
 
-    // save user program counter.
+    // ⭐ 立即保存 sepc 到 trapframe
     p->tf->epc = sepc;
 
     // 针对scause制定的一系列规则
@@ -45,7 +44,7 @@ void trap_user_handler()
 
     if(scause == 8){
         // system call
-        // if(killed(p)) exit(-1);
+        if(proc_killed(p)) proc_exit(-1);
 
         // sepc points to the ecall instruction,
         // but we want to return to the next instruction.
@@ -62,14 +61,11 @@ void trap_user_handler()
         case 1:
             // 处理时钟中断
             timer_interrupt_handler();
-            break;
-        case 5:
-            // 处理计时器中断
-            // Pass anyway...
+            proc_yield();
             break;
         case 9:
-            // 处理外部中断
-            external_interrupt_handler();
+            // 处理外部中断 - 暂时忽略
+            // external_interrupt_handler();
             break;
         default:
             printf("usertrap(): unexpected interrupt at pid=%d\n", p->pid);
@@ -86,8 +82,10 @@ void trap_user_handler()
         printf("            scause %p\n", scause);
         printf("            sepc=%p stval=%p\n", sepc, stval);
         panic("usertrap: unexpected exception");
-        // setkilled(p);
+        proc_setkilled(p);
     }
+
+    if(proc_killed(p)) proc_exit(-1);
 
     trap_user_return();
 }
@@ -98,16 +96,24 @@ void trap_user_return()
 {
     struct proc *p = myproc();
 
+    // we're about to switch the destination of traps from
+    // kerneltrap() to usertrap(), so turn off interrupts until
+    // we're back in user space, where usertrap() is correct.
     intr_off();
 
     // send syscalls, interrupts, and exceptions to uservec in trampoline.S
     uint64 trampoline_uservec = TRAMPOLINE + (user_vector - trampoline);
     w_stvec(trampoline_uservec);
 
+    // set up trapframe values that uservec will need when
+    // the process next traps into the kernel.
     p->tf->kernel_satp = r_satp();         // kernel page table
     p->tf->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
     p->tf->kernel_trap = (uint64)trap_user_handler;
     p->tf->kernel_hartid = r_tp();         // hartid for cpuid()
+
+    // set up the registers that trampoline.S's sret will use
+    // to get to user space.
 
     // set S Previous Privilege mode to User.
     unsigned long x = r_sstatus();
@@ -118,9 +124,13 @@ void trap_user_return()
     // set S Exception Program Counter to the saved user pc.
     w_sepc(p->tf->epc);
 
+    w_sscratch(TRAPFRAME);
     // tell trampoline.S the user page table to switch to.
     uint64 satp = MAKE_SATP(p->pgtbl);
 
+    // jump to userret in trampoline.S at the top of memory, which 
+    // switches to the user page table, restores user registers,
+    // and switches to user mode with sret.
     uint64 trampoline_userret = TRAMPOLINE + (user_return - trampoline);
     ((void (*)(uint64, uint64))trampoline_userret)(TRAPFRAME, satp);
 }

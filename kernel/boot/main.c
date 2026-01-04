@@ -4,10 +4,12 @@
 #include "lib/str.h"
 #include "mem/pmem.h"
 #include "mem/vmem.h"
-#include "mem/mmap.h"
 #include "proc/proc.h"
-#include "proc/cpu.h"      // 包含 myproc()
 #include "trap/trap.h"
+#include "fs/file.h"
+#include "fs/bio.h"
+#include "fs/fs.h"
+#include "dev/vio.h"
 
 volatile static int started = 0;
 
@@ -19,17 +21,19 @@ void main()
         pmem_init();
         kvm_init();
         kvm_inithart();
-        mmap_init(); 
-        proc_init();         // 初始化进程表
+        proc_init();
         trap_kernel_init();
         trap_kernel_inithart();
         plic_init();
         plic_inithart();
-        proc_make_first();   // 创建第一个进程
+        fs_init(ROOTDEV);
+        file_init();
+        proc_make_first();
 
         printf("cpu %d is booting!\n", cpuid);
         __sync_synchronize();
         started = 1;
+
     }
     else{
         while(started == 0) {};
@@ -39,7 +43,6 @@ void main()
         trap_kernel_inithart();
         plic_inithart();
     }
-    
-    intr_on();
-    proc_scheduler();  
+
+    proc_scheduler();
 }

@@ -15,10 +15,10 @@ typedef struct timer {
 // 定时器频率（Hz）- RISC-V QEMU 默认为 10MHz
 #define TIMER_FREQ 10000000
 
-void   timer_init();       // 时钟初始化(in M-mode)
-
-void   timer_create();     // 时钟创建
-void   timer_update();     // 时钟更新(ticks++)
-uint64 timer_get_ticks();  // 获取时钟的tick
+void     timer_init();       // 时钟初始化(in M-mode)
+void     timer_create();     // 时钟创建
+void     timer_update();     // 时钟更新(ticks++)
+timer_t* timer_get();        // 获取系统时钟结构体指针 ← 添加这一行
+uint64   timer_get_ticks();  // 获取时钟的tick
 
 #endif

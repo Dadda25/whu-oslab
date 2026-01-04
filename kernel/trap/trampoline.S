@@ -79,7 +79,7 @@ user_vector:
 .globl user_return
 user_return:
 
-        # 切换到用户页表
+        # 然后再切换到用户页表
         csrw satp, a1
         sfence.vma zero, zero
 

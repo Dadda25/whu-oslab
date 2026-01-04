@@ -6,6 +6,7 @@
 #include "proc/cpu.h"
 #include "memlayout.h"
 #include "riscv.h"
+#include "dev/vio.h"
 
 // 中断信息
 char* interrupt_info[16] = {
@@ -75,8 +76,8 @@ void external_interrupt_handler()
         case UART_IRQ:
             uart_intr();
             break;
-        case VIRTIO0_IRQ:
-            // virtio_disk_intr();
+        case VIRTIO_BASE_IRQ:
+            virtio_disk_intr();
             break;
         default:
             printf("unexpected interrupt irq=%d\n", irq);
@@ -98,6 +99,7 @@ void timer_interrupt_handler()
 
     if(mycpuid() == 0){
         timer_update();
+        proc_wakeup(&timer_get()->ticks);
     }
     // 通过清除SSIP位，承认软件中断
     w_sip(r_sip() & ~2);
@@ -112,6 +114,8 @@ void trap_kernel_handler()
     uint64 scause = r_scause();      // 引发trap的原因
     uint64 stval = r_stval();        // 发生trap时保存的附加信息(不同trap不一样)
 
+    // printf("\nsepc: 0x%x, sstatus: 0x%x, scause: 0x%x, stval: 0x%x\n", sepc, sstatus, scause, stval);
+
     // 确认trap来自S-mode且此时trap处于关闭状态
     assert(sstatus & SSTATUS_SPP, "trap_kernel_handler: not from s-mode");
     assert(intr_get() == 0, "trap_kernel_handler: interreput enabled");
@@ -125,6 +129,8 @@ void trap_kernel_handler()
         switch(trap_id){
             case 1:
                 timer_interrupt_handler();
+                if(myproc() != 0 && myproc()->state == RUNNING)
+                    proc_yield();
                 break;
             case 9:
                 external_interrupt_handler();
@@ -145,4 +151,9 @@ void trap_kernel_handler()
         printf("sepc=%p stval=%p\n", sepc, stval);
         panic("kerneltrap: Exception\n");
     }
+
+    // yield() 可能已经导致了一些陷阱的发生
+    // 所以为了kernelvec.S的sepc指令使用，需要恢复陷阱寄存器。
+    w_sepc(sepc);
+    w_sstatus(sstatus);
 }

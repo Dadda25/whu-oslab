@@ -1,32 +1,32 @@
 #ifndef __PROC_H__
 #define __PROC_H__
 
+#include "common.h"
 #include "lib/lock.h"
+#include "fs/file.h"
+#include "fs/fs.h"
 
 // 页表类型定义
 typedef uint64* pgtbl_t;
 
-// mmap_region定义
-typedef struct mmap_region mmap_region_t;
-
 // context 定义
 typedef struct context {
-  uint64 ra; // 返回地址
-  uint64 sp; // 栈指针
+    uint64 ra; // 返回地址
+    uint64 sp; // 栈指针
 
-  // callee-saved
-  uint64 s0;
-  uint64 s1;
-  uint64 s2;
-  uint64 s3;
-  uint64 s4;
-  uint64 s5;
-  uint64 s6;
-  uint64 s7;
-  uint64 s8;
-  uint64 s9;
-  uint64 s10;
-  uint64 s11;
+    // callee-saved
+    uint64 s0;
+    uint64 s1;
+    uint64 s2;
+    uint64 s3;
+    uint64 s4;
+    uint64 s5;
+    uint64 s6;
+    uint64 s7;
+    uint64 s8;
+    uint64 s9;
+    uint64 s10;
+    uint64 s11;
 } context_t;
 
 // trapframe 定义
@@ -92,29 +92,35 @@ enum proc_state {
 
 // 进程定义
 typedef struct proc {
-    
-    spinlock_t lk;           // 自旋锁
+    spinlock_t lk;         // 自旋锁
 
-    /* 下面的六个字段需要持有锁才能修改 */
-
+    // 使用前需要持有p->lock才能访问
     int pid;                 // 标识符
-    enum proc_state state;   // 进程状态
-    struct proc* parent;     // 父进程
-    int exit_state;          // 进程退出时的状态(父进程可能关心)
+    enum proc_state state;    // 进程状态
     void* sleep_space;       // 睡眠是为在等待什么
+    int xstate;              // 进程退出时的状态
+    bool killed;              // 是否已被杀死（功能有待扩展）
+    
+    // 使用前需要持有wait_lock才能访问
+    struct proc *parent;     // 父进程
 
+    // 每个进程独立的数据，访问时无需上锁
     pgtbl_t pgtbl;           // 用户态页表
     uint64 heap_top;         // 用户堆顶(以字节为单位)
     uint64 ustack_pages;     // 用户栈占用的页面数量
-    mmap_region_t* mmap;     // 用户可映射区域的起始节点
     trapframe_t* tf;         // 用户态内核态切换时的运行环境暂存空间
 
     uint64 kstack;           // 内核栈的虚拟地址
     context_t ctx;           // 内核态进程上下文
+
+    struct File *ofile[NOFILE];  // 打开的文件
+    
 } proc_t;
+
 
 void     proc_init();                                  // 进程模块初始化
 void     proc_make_first();                            // 创建第一个进程并切换到它执行
+void     proc_mapstacks(pgtbl_t kpgtbl);               // 在内核中映射栈部分的内存
 pgtbl_t  proc_pgtbl_init(uint64 trapframe);            // 进程页表的初始化和基本映射
 proc_t*  proc_alloc();                                 // 进程申请
 void     proc_free(proc_t* p);                         // 进程释放
@@ -124,7 +130,9 @@ void     proc_exit(int exit_state);                    // 进程退出
 void     proc_yield();                                 // 进程放弃CPU
 void     proc_sleep(void* sleep_space, spinlock_t* lk);// 进程睡眠
 void     proc_wakeup(void* sleep_space);               // 进程唤醒
+int      proc_kill(int pid);                           // 杀死一个进程
+void     proc_setkilled(proc_t *p);                    // 将进程修改为已杀死状态
+bool     proc_killed(proc_t *proc);                    // 进程是否已经被杀死
 void     proc_sched();                                 // 进程切换到调度器
 void     proc_scheduler();                             // 调度器
-void     forkret(void);
 #endif

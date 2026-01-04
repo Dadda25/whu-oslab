@@ -48,19 +48,25 @@ void spinlock_init(spinlock_t *lk, char *name)
 void spinlock_acquire(spinlock_t *lk)
 {    
     push_off(); // disable interrupts to avoid deadlock.
-    if(spinlock_holding(lk)) {
-        printf("acquire panic: lock=%p, name=%s, cpu=%d\n", 
-               lk, lk->name, mycpuid());
+    if(spinlock_holding(lk))
         panic("acquire");
-    }
     
+    // On RISC-V, sync_lock_test_and_set turns into an atomic swap:
+    //   a5 = 1
+    //   s1 = &lk->locked
+    //   amoswap.w.aq a5, a5, (s1)
     while(__sync_lock_test_and_set(&lk->locked, 1) != 0)
-        ;
+    ;
 
+    // Tell the C compiler and the processor to not move loads or stores
+    // past this point, to ensure that the critical section's memory
+    // references happen strictly after the lock is acquired.
+    // On RISC-V, this emits a fence instruction.
     __sync_synchronize();
 
+    // Record info about lock acquisition for spinlock_holding() and debugging.
     lk->cpuid = mycpuid();
-}
+} 
 
 // 释放自旋锁
 void spinlock_release(spinlock_t *lk)

@@ -5,38 +5,50 @@
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
 #include "syscall/sysfunc.h"
-#include "dev/timer.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "common.h"
 
 // 系统调用跳转
 static uint64 (*syscalls[])(void) = {
+    [SYS_test]          sys_test,
     [SYS_print]         sys_print,
     [SYS_brk]           sys_brk,
-    [SYS_mmap]          sys_mmap,
-    [SYS_munmap]        sys_munmap,
+    [SYS_open]          sys_open,
+    [SYS_close]         sys_close,
     [SYS_fork]          sys_fork,
     [SYS_wait]          sys_wait,
     [SYS_exit]          sys_exit,
     [SYS_sleep]         sys_sleep,
+    [SYS_kill]          sys_kill,
+    [SYS_getpid]        sys_getpid,
+    [SYS_read]          sys_read,
+    [SYS_write]         sys_write,
+    [SYS_mkdir]         sys_mkdir,
+    [SYS_link]          sys_link,
+    [SYS_unlink]        sys_unlink,
+    [SYS_fstat]         sys_fstat,
+    [SYS_dup]           sys_dup,
+    [SYS_yield]         sys_yield,
+    [SYS_getticks]      sys_getticks,
 };
+
+// 定长数组的宏定义
+#define NELEM(x) (sizeof(x)/sizeof((x)[0]))
 
 // 系统调用
 void syscall()
 {
-    proc_t* p = myproc();
-    uint64 syscall_num = p->tf->a7;
-    
-    // 检查系统调用号是否有效
-    if(syscall_num >= 0 && syscall_num <= SYS_MAX && syscalls[syscall_num]) {
-        // 调用对应的系统调用函数，返回值存储在a0寄存器
-        p->tf->a0 = syscalls[syscall_num]();
-    } else {
-        // 无效的系统调用号
-        printf("syscall: unknown syscall %d from pid %d\n", syscall_num, p->pid);
-        p->tf->a0 = -1;
-    }
+  int num;
+  struct proc *p = myproc();
+
+  num = p->tf->a7;
+  if(num >= 0 && num < NELEM(syscalls) && syscalls[num]) {
+    // Use num to lookup the system call function for num, call it,
+    // and store its return value in p->tf->a0
+    p->tf->a0 = syscalls[num]();
+  } else {
+    printf("proc %d : unknown sys call %d\n",
+            p->pid, num);
+    p->tf->a0 = -1;
+  }
 }
 
 /*
@@ -69,6 +81,12 @@ static uint64 arg_raw(int n)
     }
 }
 
+// 读取 n 号参数，作为正常的 int 存储
+void arg_int(int n, int* ip)
+{
+    *ip = arg_raw(n);
+}
+
 // 读取 n 号参数, 作为 uint32 存储
 void arg_uint32(int n, uint32* ip)
 {
@@ -89,4 +107,18 @@ void arg_str(int n, char* buf, int maxlen)
     arg_uint64(n, &addr);
 
     uvm_copyin_str(p->pgtbl, (uint64)buf, addr, maxlen);
+}
+
+int arg_fd(int n, int *pfd, struct File **pf) {
+    int fd;
+    struct File *f;
+    
+    arg_int(n, &fd);
+    if(fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
+        return -1;
+    if(pfd)
+        *pfd = fd;
+    if(pf)
+        *pf = f;
+    return 0;
 }

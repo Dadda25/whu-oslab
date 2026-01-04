@@ -5,97 +5,70 @@
 #include "lib/print.h"
 #include "lib/str.h"
 #include "memlayout.h"
-#include "common.h"
 #include "riscv.h"
 
-// 连续虚拟空间的复制(在uvm_copy_pgtbl中使用)
-static void copy_range(pgtbl_t old, pgtbl_t new, uint64 begin, uint64 end)
-{
-    uint64 va, pa, page;
-    int flags;
-    pte_t* pte;
-
-    for(va = begin; va < end; va += PGSIZE)
-    {
-        pte = vm_getpte(old, va, false);
-        
-        if(pte == NULL || !((*pte) & PTE_V)) {
-            continue;  // 跳过未映射的页
-        }
-        
-        pa = (uint64)PTE_TO_PA(*pte);
-        flags = (int)PTE_FLAGS(*pte);
-
-        page = (uint64)pmem_alloc(false);
-        if(page == 0) {
-            panic("copy_range: pmem_alloc failed");
-        }
-        memmove((char*)page, (const char*)pa, PGSIZE);
-        vm_mappages(new, va, page, PGSIZE, flags);
-    }
-}
-
 // 递归释放 页表占用的物理页 和 页表管理的物理页
-// ps: 顶级页表level = 3, level = 0 说明是页表管理的物理页
+// ps: 顶级页表level = 0, level = 3 说明是页表管理的物理页
 static void destroy_pgtbl(pgtbl_t pgtbl, uint32 level)
 {
-    if(level == 0) return;
-    
-    // 遍历当前级别的所有PTE
-    for(int i = 0; i < PGSIZE / sizeof(pte_t); i++) {
-        pte_t pte = pgtbl[i];
-        if(pte & PTE_V) {
-            if(level > 1) {
-                // 这是一个指向下一级页表的PTE
-                pgtbl_t next_pgtbl = (pgtbl_t)PTE_TO_PA(pte);
-                destroy_pgtbl(next_pgtbl, level - 1);
-                pmem_free((uint64)next_pgtbl, PMEM_KERNEL);
-            } else {
-                // level == 1，这是最后一级页表，释放物理页
-                uint64 pa = PTE_TO_PA(pte);
-                pmem_free(pa, PMEM_USER);
+    if (pgtbl == NULL) {
+        return;
+    }
+
+    // 第一个问题：我不知道如何正确的递归删除页表和页表管理的物理页
+    // 先删除子页面
+    if(level < 3){
+        for(int i=0; i<512; i++){
+            pte_t *pte = &pgtbl[i];
+            pgtbl_t pa = (pgtbl_t)PTE_TO_PA(*pte);
+            if(pte && pa){
+                destroy_pgtbl(pa, level + 1);
             }
         }
     }
+    // 然后删除自己（反正都是物理地址）
+    pmem_free_auto((uint64)pgtbl);
 }
 
 // 页表销毁：trapframe 和 trampoline 单独处理
 void uvm_destroy_pgtbl(pgtbl_t pgtbl)
 {
-    // 先解除trapframe和trampoline的映射（不释放物理页）
-    vm_unmappages(pgtbl, TRAPFRAME, PGSIZE, false);
-    vm_unmappages(pgtbl, TRAMPOLINE, PGSIZE, false);
-    
-    // 递归销毁页表
-    destroy_pgtbl(pgtbl, 3);
-    
-    // 释放顶级页表本身
-    pmem_free((uint64)pgtbl, PMEM_KERNEL);
+    vm_unmappages(pgtbl, TRAMPOLINE, PGSIZE, 0);
+    vm_unmappages(pgtbl, TRAPFRAME, PGSIZE, 0);
+    destroy_pgtbl(pgtbl, 0);
 }
 
 // 拷贝页表 (拷贝并不包括trapframe 和 trampoline)
 void uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint32 ustack_pages, mmap_region_t* mmap)
 {
-    /* step-1: 从 PGSIZE 到 heap_top (代码段 + 堆) */
-    if(heap_top > PGSIZE) {
-        copy_range(old, new, PGSIZE, PG_ROUND_UP(heap_top));
+    pte_t *pte;
+    uint64 pa, va;
+    uint8 flags;
+    char *mem;
+
+    /* step-1: USER_BASE ~ heap_top */
+    for(va = 0; va < heap_top; va += PGSIZE){
+        if((pte = vm_getpte(old, va, 0)) == 0)
+            panic("uvmcopy: pte should exist");
+        if((*pte & PTE_V) == 0)
+            panic("uvmcopy: page not present");
+        pa = PTE_TO_PA(*pte);
+        flags = PTE_FLAGS(*pte);
+        if((mem = pmem_alloc(false)) == 0){
+            vm_unmappages(new, 0, va / PGSIZE, 1);
+            printf("uvmcopy warning: mem alloc failed");
+        }
+        memmove(mem, (char*)pa, PGSIZE);
+
+        vm_mappages(new, va, (uint64)mem, PGSIZE, flags);
     }
 
-    /* step-2: 用户栈 */
-    if(ustack_pages > 0) {
-        uint64 stack_top = TRAPFRAME;
-        uint64 stack_bottom = stack_top - ustack_pages * PGSIZE;
-        copy_range(old, new, stack_bottom, stack_top);
-    }
+    /* step-2: ustack */
+    // 由于每个进程都有对应的映射用户栈（proc_mapstacks已配备）
+    // 目前暂时不用处理此部分，因为用户栈和用户代码共用一页    
 
     /* step-3: mmap_region */
-    mmap_region_t* tmp = mmap;
-    while(tmp != NULL) {
-        uint64 mmap_begin = tmp->begin;
-        uint64 mmap_end = tmp->begin + tmp->npages * PGSIZE;
-        copy_range(old, new, mmap_begin, mmap_end);
-        tmp = tmp->next;
-    }
+    // 这部分未涉及mmap的东西，所以不写
 }
 
 // 在用户页表和进程mmap链里 新增mmap区域 [begin, begin + npages * PGSIZE)
@@ -105,40 +78,10 @@ void uvm_mmap(uint64 begin, uint32 npages, int perm)
     if(npages == 0) return;
     assert(begin % PGSIZE == 0, "uvm_mmap: begin not aligned");
 
-    proc_t* p = myproc();
-    
-    /* 修改 mmap 链 */
-    mmap_region_t* new_region = mmap_region_alloc();
-    new_region->begin = begin;
-    new_region->npages = npages;
-    new_region->next = NULL;
-    
-    if(p->mmap == NULL) {
-        p->mmap = new_region;
-    } else {
-        mmap_region_t* prev = NULL;
-        mmap_region_t* curr = p->mmap;
-        
-        while(curr != NULL && curr->begin < begin) {
-            prev = curr;
-            curr = curr->next;
-        }
-        
-        if(prev == NULL) {
-            new_region->next = p->mmap;
-            p->mmap = new_region;
-        } else {
-            new_region->next = curr;
-            prev->next = new_region;
-        }
-    }
+    // 修改 mmap 链 (分情况的链式操作)
 
-    /* 修改页表 */
-    for(uint32 i = 0; i < npages; i++) {
-        uint64 va = begin + i * PGSIZE;
-        uint64 pa = (uint64)pmem_alloc(PMEM_USER);
-        vm_mappages(p->pgtbl, va, pa, PGSIZE, perm);
-    }
+    // 修改页表 (物理页申请 + 页表映射)
+
 }
 
 // 在用户页表和进程mmap链里释放mmap区域 [begin, begin + npages * PGSIZE)
@@ -147,203 +90,154 @@ void uvm_munmap(uint64 begin, uint32 npages)
     if(npages == 0) return;
     assert(begin % PGSIZE == 0, "uvm_munmap: begin not aligned");
 
-    proc_t* p = myproc();
-    uint64 end = begin + npages * PGSIZE;
-    
-    /* 处理 mmap 链 */
-    mmap_region_t* prev = NULL;
-    mmap_region_t* curr = p->mmap;
-    
-    while(curr != NULL) {
-        uint64 curr_begin = curr->begin;
-        uint64 curr_end = curr->begin + curr->npages * PGSIZE;
-        
-        if(curr_end <= begin || curr_begin >= end) {
-            prev = curr;
-            curr = curr->next;
-            continue;
-        }
-        
-        if(begin <= curr_begin && end >= curr_end) {
-            if(prev == NULL) {
-                p->mmap = curr->next;
-            } else {
-                prev->next = curr->next;
-            }
-            mmap_region_t* to_free = curr;
-            curr = curr->next;
-            mmap_region_free(to_free);
-            continue;
-        }
-        
-        if(begin <= curr_begin && end < curr_end) {
-            uint32 removed_pages = (end - curr_begin) / PGSIZE;
-            curr->begin = end;
-            curr->npages -= removed_pages;
-            prev = curr;
-            curr = curr->next;
-            continue;
-        }
-        
-        if(begin > curr_begin && end >= curr_end) {
-            uint32 removed_pages = (curr_end - begin) / PGSIZE;
-            curr->npages -= removed_pages;
-            prev = curr;
-            curr = curr->next;
-            continue;
-        }
-        
-        if(begin > curr_begin && end < curr_end) {
-            mmap_region_t* new_region = mmap_region_alloc();
-            new_region->begin = end;
-            new_region->npages = (curr_end - end) / PGSIZE;
-            new_region->next = curr->next;
-            
-            curr->npages = (begin - curr_begin) / PGSIZE;
-            curr->next = new_region;
-            
-            prev = new_region;
-            curr = new_region->next;
-            continue;
-        }
-        
-        prev = curr;
-        curr = curr->next;
-    }
+    // new mmap_region 的产生
 
-    /* 页表释放 */
-    vm_unmappages(p->pgtbl, begin, npages * PGSIZE, true);
+    // 尝试合并 mmap_region
+
+    // 页表释放
+
 }
 
-// 用户堆空间增加
+// 用户堆空间增加, 返回新的堆顶地址 (注意栈顶最大值限制)
+// 在这里无需修正 p->heap_top
 uint64 uvm_heap_grow(pgtbl_t pgtbl, uint64 heap_top, uint32 len)
 {
+    uint64 a;
+    char* mem;
+
+    heap_top = PG_ROUND_UP(heap_top);
     uint64 new_heap_top = heap_top + len;
-    uint64 heap_top_aligned = PG_ROUND_UP(heap_top);
-    uint64 new_heap_top_aligned = PG_ROUND_UP(new_heap_top);
-    
-    if(new_heap_top_aligned >= TRAPFRAME - 256 * PGSIZE) {
-        return -1;
-    }
-    
-    if(new_heap_top_aligned > heap_top_aligned) {
-        uint64 npages = (new_heap_top_aligned - heap_top_aligned) / PGSIZE;
-        for(uint64 i = 0; i < npages; i++) {
-            uint64 va = heap_top_aligned + i * PGSIZE;
-            uint64 pa = (uint64)pmem_alloc(PMEM_USER);
-            vm_mappages(pgtbl, va, pa, PGSIZE, PTE_R | PTE_W | PTE_U);
+    for(a = heap_top; a < new_heap_top; a += PGSIZE){
+        mem = pmem_alloc(false);
+        if(mem == 0){
+            uvm_heap_ungrow(pgtbl, a, a - heap_top);
+            return -1;
         }
+        memset(mem, 0, PGSIZE);
+        vm_mappages(pgtbl, a, (uint64)mem, PGSIZE, PTE_W|PTE_R|PTE_U);
     }
+
+    myproc()->heap_top = new_heap_top;
 
     return new_heap_top;
 }
 
-// 用户堆空间减少
+// 用户堆空间减少, 返回新的堆顶地址
+// 在这里无需修正 p->heap_top
 uint64 uvm_heap_ungrow(pgtbl_t pgtbl, uint64 heap_top, uint32 len)
 {
-    if(len >= heap_top) {
-        return 0;
-    }
-    
     uint64 new_heap_top = heap_top - len;
-    uint64 heap_top_aligned = PG_ROUND_UP(heap_top);
-    uint64 new_heap_top_aligned = PG_ROUND_UP(new_heap_top);
-    
-    if(new_heap_top_aligned < heap_top_aligned) {
-        uint64 npages = (heap_top_aligned - new_heap_top_aligned) / PGSIZE;
-        vm_unmappages(pgtbl, new_heap_top_aligned, npages * PGSIZE, true);
-    }
+
+    vm_unmappages(pgtbl, new_heap_top, len, 1);
+
+    myproc()->heap_top = new_heap_top;
 
     return new_heap_top;
 }
 
-// 其他函数保持不变...
-void uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
+// 用户态地址空间[src, src+len) 拷贝至 内核态地址空间[dst, dst+len)
+// 注意: src dst 不一定是 page-aligned
+int uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
 {
-    char* dst_ptr = (char*)dst;
-    uint64 src_va = src;
-    uint32 remaining = len;
-    
-    while(remaining > 0) {
-        uint64 src_page_base = PG_ROUND_DOWN(src_va);
-        uint64 offset_in_page = src_va - src_page_base;
-        uint32 copy_len = PGSIZE - offset_in_page;
-        if(copy_len > remaining) {
-            copy_len = remaining;
-        }
-        
-        pte_t* pte = vm_getpte(pgtbl, src_va, false);
-        assert(pte != NULL && ((*pte) & PTE_V), "uvm_copyin: invalid address");
-        
-        uint64 pa = PTE_TO_PA(*pte);
-        char* src_ptr = (char*)(pa + offset_in_page);
-        
-        memmove(dst_ptr, src_ptr, copy_len);
-        
-        dst_ptr += copy_len;
-        src_va += copy_len;
-        remaining -= copy_len;
+    uint64 n, va0, pa0;
+
+    while(len > 0){
+        va0 = PG_ROUND_DOWN(src);
+        if ( va0 >= VA_MAX ) return -1;
+        pa0 = vm_getpa(pgtbl, va0);
+        if(pa0 == 0) return -1;
+        n = PGSIZE - (src - va0);
+        if(n > len)
+            n = len;
+        memmove((char *)dst, (void *)(pa0 + (src - va0)), n);
+
+        len -= n;
+        dst += n;
+        src = va0 + PGSIZE;
     }
+
+    return 0;
 }
 
-void uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
+// 内核态地址空间[src, src+len） 拷贝至 用户态地址空间[dst, dst+len)
+int uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
 {
-    char* src_ptr = (char*)src;
-    uint64 dst_va = dst;
-    uint32 remaining = len;
-    
-    while(remaining > 0) {
-        uint64 dst_page_base = PG_ROUND_DOWN(dst_va);
-        uint64 offset_in_page = dst_va - dst_page_base;
-        uint32 copy_len = PGSIZE - offset_in_page;
-        if(copy_len > remaining) {
-            copy_len = remaining;
-        }
-        
-        pte_t* pte = vm_getpte(pgtbl, dst_va, false);
-        assert(pte != NULL && ((*pte) & PTE_V), "uvm_copyout: invalid address");
-        
-        uint64 pa = PTE_TO_PA(*pte);
-        char* dst_ptr = (char*)(pa + offset_in_page);
-        
-        memmove(dst_ptr, src_ptr, copy_len);
-        
-        src_ptr += copy_len;
-        dst_va += copy_len;
-        remaining -= copy_len;
+    uint64 n, va0, pa0;
+
+    while(len > 0){
+        va0 = PG_ROUND_DOWN(dst);
+        if ( va0 >= VA_MAX ) return -1;
+        pa0 = vm_getpa(pgtbl, va0);
+        if(pa0 == 0) return -1;
+        n = PGSIZE - (dst - va0);
+        if(n > len)
+            n = len;
+        memmove((void *)(pa0 + (dst - va0)), (char *)src, n);
+
+        len -= n;
+        src += n;
+        dst = va0 + PGSIZE;
     }
+
+    return 0;
 }
 
+// 用户态字符串拷贝到内核态
+// 最多拷贝maxlen字节, 中途遇到'\0'则终止
+// 注意: src dst 不一定是 page-aligned
 void uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen)
 {
-    char* dst_ptr = (char*)dst;
-    uint64 src_va = src;
-    uint32 copied = 0;
-    
-    while(copied < maxlen) {
-        uint64 src_page_base = PG_ROUND_DOWN(src_va);
-        uint64 offset_in_page = src_va - src_page_base;
-        
-        pte_t* pte = vm_getpte(pgtbl, src_va, false);
-        assert(pte != NULL && ((*pte) & PTE_V), "uvm_copyin_str: invalid address");
-        
-        uint64 pa = PTE_TO_PA(*pte);
-        char* src_ptr = (char*)(pa + offset_in_page);
-        
-        while(offset_in_page < PGSIZE && copied < maxlen) {
-            *dst_ptr = *src_ptr;
-            if(*src_ptr == '\0') {
-                return;
+    uint64 n, va0, pa0;
+    int got_null = 0;
+
+    while(got_null == 0 && maxlen > 0){
+        va0 = PG_ROUND_DOWN(src);
+        pa0 = vm_getpa(pgtbl, va0);
+        if(pa0 == 0) return;
+        n = PGSIZE - (src - va0);
+        if(n > maxlen) n = maxlen;
+
+        char *p = (char *) (pa0 + (src - va0));
+        while(n > 0){
+            if(*p == '\0'){
+                *((char *)dst) = '\0';
+                got_null = 1;
+                break;
+            } else {
+                *((char *)dst) = *p;
             }
-            dst_ptr++;
-            src_ptr++;
-            src_va++;
-            offset_in_page++;
-            copied++;
+            --n;
+            --maxlen;
+            p++;
+            dst++;
         }
+
+        src = va0 + PGSIZE;
     }
-    
-    if(copied == maxlen) {
-        *(dst_ptr - 1) = '\0';
+}
+
+// Copy to either a user address, or kernel address,
+// depending on usr_dst.
+int either_copyout(bool user_dst, uint64 dst, void *src, uint64 len)
+{
+    struct proc *p = myproc();
+    if(user_dst){
+        uvm_copyout(p->pgtbl, dst, (uint64)src, len);
+    } else {
+        memmove((char *)dst, src, len);
     }
+    return 0;
+}
+
+// Copy from either a user address, or kernel address,
+// depending on usr_src.
+int either_copyin(void *dst, bool user_src, uint64 src, uint64 len)
+{
+    struct proc *p = myproc();
+    if(user_src){
+        uvm_copyin(p->pgtbl, (uint64)dst, src, len);
+    } else {
+        memmove(dst, (char*)src, len);
+    }
+    return 0;
 }

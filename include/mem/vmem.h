@@ -58,7 +58,7 @@ void    kvm_inithart();
 void   uvm_show_mmaplist(mmap_region_t* mmap);
 
 void   uvm_destroy_pgtbl(pgtbl_t pgtbl);
-void uvm_copy_pgtbl(pgtbl_t new, pgtbl_t old, uint64 heap_top, uint32 ustack_pages, mmap_region_t* mmap);
+void   uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint32 ustack_pages, mmap_region_t* mmap);
 
 void   uvm_mmap(uint64 begin, uint32 npages, int perm);
 void   uvm_munmap(uint64 begin, uint32 npages);
@@ -66,8 +66,11 @@ void   uvm_munmap(uint64 begin, uint32 npages);
 uint64 uvm_heap_grow(pgtbl_t pgtbl, uint64 heap_top, uint32 len);
 uint64 uvm_heap_ungrow(pgtbl_t pgtbl, uint64 heap_top, uint32 len);
 
-void   uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
-void   uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
+int    uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
+int    uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
 void   uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen);
+
+int   either_copyout(bool user_dst, uint64 dst, void *src, uint64 len);
+int   either_copyin(void *dst, bool user_src, uint64 src, uint64 len);
 
 #endif

@@ -9,6 +9,7 @@ void plic_init()
 {
     // 设置中断优先级
     *(uint32*)(PLIC_PRIORITY(UART_IRQ)) = 1;
+    *(uint32*)(PLIC_PRIORITY(VIRTIO0_IRQ)) = 1;  // 修改：VIRTIO_BASE_IRQ -> VIRTIO0_IRQ
 }
 
 // PLIC核心初始化
@@ -16,7 +17,7 @@ void plic_inithart()
 {   
     int hartid = mycpuid();
     // 使能中断开关
-    *(uint32*)PLIC_SENABLE(hartid) = (1 << UART_IRQ);
+    *(uint32*)PLIC_SENABLE(hartid) = (1 << UART_IRQ) | (1 << VIRTIO0_IRQ);  // 修改：VIRTIO_BASE_IRQ -> VIRTIO0_IRQ
     // 设置响应阈值
     *(uint32*)PLIC_SPRIORITY(hartid) = 0;
 }

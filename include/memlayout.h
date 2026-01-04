@@ -10,6 +10,10 @@
 #define VIRTIO0 0x10001000
 #define VIRTIO0_IRQ 1
 
+// 兼容性定义（支持使用旧命名 VIRTIO_BASE 的代码）
+#define VIRTIO_BASE VIRTIO0
+#define VIRTIO_BASE_IRQ VIRTIO0_IRQ
+
 // 内核基地址
 #define KERNEL_BASE 0x80000000ul
 #define PHYSTOP (KERNEL_BASE + 128*1024*1024)
