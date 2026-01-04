@@ -58,7 +58,7 @@ void    kvm_inithart();
 void   uvm_show_mmaplist(mmap_region_t* mmap);
 
 void   uvm_destroy_pgtbl(pgtbl_t pgtbl);
-void   uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint32 ustack_pages, mmap_region_t* mmap);
+void uvm_copy_pgtbl(pgtbl_t new, pgtbl_t old, uint64 heap_top, uint32 ustack_pages, mmap_region_t* mmap);
 
 void   uvm_mmap(uint64 begin, uint32 npages, int perm);
 void   uvm_munmap(uint64 begin, uint32 npages);

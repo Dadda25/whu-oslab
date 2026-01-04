@@ -98,24 +98,16 @@ void trap_user_return()
 {
     struct proc *p = myproc();
 
-    // we're about to switch the destination of traps from
-    // kerneltrap() to usertrap(), so turn off interrupts until
-    // we're back in user space, where usertrap() is correct.
     intr_off();
 
     // send syscalls, interrupts, and exceptions to uservec in trampoline.S
     uint64 trampoline_uservec = TRAMPOLINE + (user_vector - trampoline);
     w_stvec(trampoline_uservec);
 
-    // set up trapframe values that uservec will need when
-    // the process next traps into the kernel.
     p->tf->kernel_satp = r_satp();         // kernel page table
     p->tf->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
     p->tf->kernel_trap = (uint64)trap_user_handler;
     p->tf->kernel_hartid = r_tp();         // hartid for cpuid()
-
-    // set up the registers that trampoline.S's sret will use
-    // to get to user space.
 
     // set S Previous Privilege mode to User.
     unsigned long x = r_sstatus();
@@ -129,9 +121,6 @@ void trap_user_return()
     // tell trampoline.S the user page table to switch to.
     uint64 satp = MAKE_SATP(p->pgtbl);
 
-    // jump to userret in trampoline.S at the top of memory, which 
-    // switches to the user page table, restores user registers,
-    // and switches to user mode with sret.
     uint64 trampoline_userret = TRAMPOLINE + (user_return - trampoline);
     ((void (*)(uint64, uint64))trampoline_userret)(TRAPFRAME, satp);
 }

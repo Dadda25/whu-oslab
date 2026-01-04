@@ -5,31 +5,31 @@
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
 #include "syscall/sysfunc.h"
+#include "dev/timer.h"
 #include "memlayout.h"
-#include "common.h"
 #include "riscv.h"
+#include "common.h"
 
 // 系统调用跳转
 static uint64 (*syscalls[])(void) = {
-    [SYS_test]          sys_test,
+    [SYS_print]         sys_print,
     [SYS_brk]           sys_brk,
     [SYS_mmap]          sys_mmap,
     [SYS_munmap]        sys_munmap,
-    [SYS_copyin]        sys_copyin,
-    [SYS_copyout]       sys_copyout,
-    [SYS_copyinstr]     sys_copyinstr,
+    [SYS_fork]          sys_fork,
+    [SYS_wait]          sys_wait,
+    [SYS_exit]          sys_exit,
+    [SYS_sleep]         sys_sleep,
 };
 
 // 系统调用
 void syscall()
 {
     proc_t* p = myproc();
-    
-    // 从a7寄存器获取系统调用号
     uint64 syscall_num = p->tf->a7;
     
     // 检查系统调用号是否有效
-    if(syscall_num >= 0 && syscall_num < sizeof(syscalls)/sizeof(syscalls[0]) && syscalls[syscall_num]) {
+    if(syscall_num >= 0 && syscall_num <= SYS_MAX && syscalls[syscall_num]) {
         // 调用对应的系统调用函数，返回值存储在a0寄存器
         p->tf->a0 = syscalls[syscall_num]();
     } else {
@@ -87,6 +87,6 @@ void arg_str(int n, char* buf, int maxlen)
     proc_t* p = myproc();
     uint64 addr;
     arg_uint64(n, &addr);
+
     uvm_copyin_str(p->pgtbl, (uint64)buf, addr, maxlen);
 }
-
